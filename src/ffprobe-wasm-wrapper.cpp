@@ -33,6 +33,7 @@ typedef struct Tag {
 } Tag;
 
 typedef struct Stream {
+  int index;
   int id;
   float start_time;
   float duration;
@@ -47,6 +48,10 @@ typedef struct Stream {
   int channels;
   int sample_rate;
   int frame_size;
+  std::string avg_frame_rate;
+  std::string r_frame_rate;
+  std::string time_base;
+  int nb_frames;
   std::vector<Tag> tags;
 } Stream;
 
@@ -58,6 +63,20 @@ typedef struct Chapter {
   std::vector<Tag> tags;
 } Chapter;
 
+typedef struct FileInfoResponse {
+  std::string name;
+  std::string filename;
+  float bit_rate;
+  float duration;
+  std::string url;
+  int nb_streams;
+  int flags;
+  int nb_chapters;
+  float start_time;
+  std::vector<Stream> streams;
+  std::vector<Chapter> chapters;
+} FileInfoResponse;
+
 typedef struct Frame {
   int frame_number;
   char pict_type;
@@ -67,18 +86,6 @@ typedef struct Frame {
   int pkt_size;
 } Frame;
 
-typedef struct FileInfoResponse {
-  std::string name;
-  float bit_rate;
-  float duration;
-  std::string url;
-  int nb_streams;
-  int flags;
-  std::vector<Stream> streams;
-  int nb_chapters;
-  std::vector<Chapter> chapters;
-} FileInfoResponse;
-
 typedef struct FramesResponse {
   std::vector<Frame> frames;
   int nb_frames;
@@ -87,6 +94,13 @@ typedef struct FramesResponse {
   double time_base;
   double avg_frame_rate;
 } FramesResponse;
+
+AVBPrint format_ration_to_string(AVRational r) {
+  AVBPrint buf;
+  av_bprint_init(&buf, 0, AV_BPRINT_SIZE_AUTOMATIC);
+  av_bprintf(&buf, "%d%s%d", r.num, (char *)"/", r.den);
+  return buf;
+}
 
 FileInfoResponse get_file_info(std::string filename) {
     av_log_set_level(AV_LOG_QUIET); // No logging output for libav.
@@ -116,12 +130,14 @@ FileInfoResponse get_file_info(std::string filename) {
     // Initialize response struct with format data.
     FileInfoResponse r = {
       .name = pFormatContext->iformat->name,
+      .filename = pFormatContext->url,
       .bit_rate = (float)pFormatContext->bit_rate,
-      .duration = (float)pFormatContext->duration,
+      .duration = (float)(pFormatContext->duration / AV_TIME_BASE),
       .url = pFormatContext->url,
       .nb_streams = (int)pFormatContext->nb_streams,
       .flags = pFormatContext->flags,
-      .nb_chapters = (int)pFormatContext->nb_chapters
+      .nb_chapters = (int)pFormatContext->nb_chapters,
+      .start_time = (float)pFormatContext->start_time,
     };
 
     // Loop through the streams.
@@ -138,9 +154,10 @@ FileInfoResponse get_file_info(std::string filename) {
       fourcc[4] = 0x00; // NULL terminator.
 
       Stream stream = {
+        .index = (int)pFormatContext->streams[i]->index,
         .id = (int)pFormatContext->streams[i]->id,
         .start_time = (float)pFormatContext->streams[i]->start_time,
-        .duration = (float)pFormatContext->streams[i]->duration,
+        .duration = (float)(pFormatContext->streams[i]->duration / AV_TIME_BASE),
         .codec_type = (int)pLocalCodecParameters->codec_type,
         .codec_name = fourcc,
         .format = av_get_pix_fmt_name((AVPixelFormat)pLocalCodecParameters->format),
@@ -152,6 +169,10 @@ FileInfoResponse get_file_info(std::string filename) {
         .channels = (int)pLocalCodecParameters->channels,
         .sample_rate = (int)pLocalCodecParameters->sample_rate,
         .frame_size = (int)pLocalCodecParameters->frame_size,
+        .avg_frame_rate = format_ration_to_string(pFormatContext->streams[i]->avg_frame_rate).str,
+        .r_frame_rate = format_ration_to_string(pFormatContext->streams[i]->r_frame_rate).str,
+        .time_base = format_ration_to_string(pFormatContext->streams[i]->time_base).str,
+        .nb_frames = (int)pFormatContext->streams[i]->nb_frames,
       };
 
       // Add tags to stream.
@@ -165,21 +186,15 @@ FileInfoResponse get_file_info(std::string filename) {
       }
 
       r.streams.push_back(stream);
-      free(fourcc);
     }
 
     // Loop through the chapters (if any).
     for (int i = 0; i < pFormatContext->nb_chapters; i++) {
       AVChapter *chapter = pFormatContext->chapters[i];
 
-      // Format timebase string to buf.
-      AVBPrint buf;
-      av_bprint_init(&buf, 0, AV_BPRINT_SIZE_AUTOMATIC);
-      av_bprintf(&buf, "%d%s%d", chapter->time_base.num, (char *)"/", chapter->time_base.den);
-
       Chapter c = {
         .id = (int)chapter->id,
-        .time_base = buf.str,
+        .time_base = format_ration_to_string(chapter->time_base).str,
         .start = (float)chapter->start,
         .end = (float)chapter->end,
       };
@@ -246,7 +261,7 @@ FramesResponse get_frames(std::string filename, int timestamp) {
 
           // Calculate the nb_frames for MKV/WebM if nb_frames is 0.
           if (nb_frames == 0) {
-            nb_frames = (pFormatContext->duration / 1000000) * pFormatContext->streams[i]->avg_frame_rate.num;
+            nb_frames = (pFormatContext->duration / AV_TIME_BASE) * pFormatContext->streams[i]->avg_frame_rate.num;
           }
           pCodec = pLocalCodec;
           pCodecParameters = pLocalCodecParameters;
@@ -336,11 +351,11 @@ EMSCRIPTEN_BINDINGS(constants) {
 EMSCRIPTEN_BINDINGS(structs) {
   emscripten::value_object<Tag>("Tag")
   .field("key", &Tag::key)
-  .field("value", &Tag::value)
-  ;
+  .field("value", &Tag::value);
   register_vector<Tag>("Tag");
 
   emscripten::value_object<Stream>("Stream")
+  .field("index", &Stream::index)
   .field("id", &Stream::id)
   .field("start_time", &Stream::start_time)
   .field("duration", &Stream::duration)
@@ -356,7 +371,10 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("sample_rate", &Stream::sample_rate)
   .field("frame_size", &Stream::frame_size)
   .field("tags", &Stream::tags)
-  ;
+  .field("avg_frame_rate", &Stream::avg_frame_rate)
+  .field("r_frame_rate", &Stream::r_frame_rate)
+  .field("time_base", &Stream::time_base)
+  .field("nb_frames", &Stream::nb_frames);
   register_vector<Stream>("Stream");
 
   emscripten::value_object<Chapter>("Chapter")
@@ -364,8 +382,7 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("time_base", &Chapter::time_base)
   .field("start", &Chapter::start)
   .field("end", &Chapter::end)
-  .field("tags", &Chapter::tags)
-  ;
+  .field("tags", &Chapter::tags);
   register_vector<Chapter>("Chapter");
 
   emscripten::value_object<Frame>("Frame")
@@ -379,15 +396,16 @@ EMSCRIPTEN_BINDINGS(structs) {
 
   emscripten::value_object<FileInfoResponse>("FileInfoResponse")
   .field("name", &FileInfoResponse::name)
+  .field("filename", &FileInfoResponse::filename)
   .field("duration", &FileInfoResponse::duration)
   .field("bit_rate", &FileInfoResponse::bit_rate)
   .field("url", &FileInfoResponse::url)
   .field("nb_streams", &FileInfoResponse::nb_streams)
   .field("flags", &FileInfoResponse::flags)
   .field("streams", &FileInfoResponse::streams)
+  .field("start_time", &FileInfoResponse::start_time)
   .field("nb_chapters", &FileInfoResponse::nb_chapters)
-  .field("chapters", &FileInfoResponse::chapters)
-  ;
+  .field("chapters", &FileInfoResponse::chapters);
   function("get_file_info", &get_file_info);
 
   emscripten::value_object<FramesResponse>("FramesResponse")
@@ -396,7 +414,6 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("gop_size", &FramesResponse::gop_size)
   .field("duration", &FramesResponse::duration)
   .field("time_base", &FramesResponse::time_base)
-  .field("avg_frame_rate", &FramesResponse::avg_frame_rate)
-  ;
+  .field("avg_frame_rate", &FramesResponse::avg_frame_rate);
   function("get_frames", &get_frames);
 }
