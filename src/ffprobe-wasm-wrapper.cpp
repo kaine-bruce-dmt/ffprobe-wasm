@@ -39,6 +39,7 @@ typedef struct Stream {
   float duration;
   int codec_type;
   std::string codec_name;
+  std::string codec_tag_string;
   std::string format;
   float bit_rate;
   std::string profile;
@@ -159,7 +160,8 @@ FileInfoResponse get_file_info(std::string filename) {
         .start_time = (float)pFormatContext->streams[i]->start_time,
         .duration = (float)(pFormatContext->streams[i]->duration / AV_TIME_BASE),
         .codec_type = (int)pLocalCodecParameters->codec_type,
-        .codec_name = fourcc,
+        .codec_name = avcodec_get_name(pLocalCodecParameters->codec_id),
+        .codec_tag_string = fourcc,
         .format = av_get_pix_fmt_name((AVPixelFormat)pLocalCodecParameters->format),
         .bit_rate = (float)pLocalCodecParameters->bit_rate,
         .profile = avcodec_profile_name(pLocalCodecParameters->codec_id, pLocalCodecParameters->profile),
@@ -361,6 +363,7 @@ EMSCRIPTEN_BINDINGS(structs) {
   .field("duration", &Stream::duration)
   .field("codec_type", &Stream::codec_type)
   .field("codec_name", &Stream::codec_name)
+  .field("codec_tag_string", &Stream::codec_tag_string)
   .field("format", &Stream::format)
   .field("bit_rate", &Stream::bit_rate)
   .field("profile", &Stream::profile)
