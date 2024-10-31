@@ -120,7 +120,7 @@ FileInfoResponse get_file_info(std::string filename) {
     // Open the file and read header.
     int ret;
     if ((ret = avformat_open_input(&pFormatContext, filename.c_str(), NULL, NULL)) < 0) {
-        printf("ERROR: %s\n", av_err2str(ret));
+      printf("ERROR opening file: %s\n", av_err2str(ret));
     }
 
     // Get stream info from format.
@@ -140,7 +140,7 @@ FileInfoResponse get_file_info(std::string filename) {
       .nb_chapters = (int)pFormatContext->nb_chapters,
       .start_time = (float)pFormatContext->start_time,
     };
-
+    
     // Loop through the streams.
     for (int i = 0; i < pFormatContext->nb_streams; i++) {
       AVCodecParameters *pLocalCodecParameters = NULL;
@@ -188,30 +188,6 @@ FileInfoResponse get_file_info(std::string filename) {
       }
 
       r.streams.push_back(stream);
-    }
-
-    // Loop through the chapters (if any).
-    for (int i = 0; i < pFormatContext->nb_chapters; i++) {
-      AVChapter *chapter = pFormatContext->chapters[i];
-
-      Chapter c = {
-        .id = (int)chapter->id,
-        .time_base = format_ration_to_string(chapter->time_base).str,
-        .start = (float)chapter->start,
-        .end = (float)chapter->end,
-      };
-
-      // Add tags to chapter.
-      const AVDictionaryEntry *tag = NULL;
-      while ((tag = av_dict_get(chapter->metadata, "", tag, AV_DICT_IGNORE_SUFFIX))) {
-        Tag t = {
-          .key = tag->key,
-          .value = tag->value,
-        };
-        c.tags.push_back(t);
-      }
-
-      r.chapters.push_back(c);
     }
 
     avformat_close_input(&pFormatContext);
